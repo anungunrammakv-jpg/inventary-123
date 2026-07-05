@@ -293,95 +293,106 @@ export default function useInventoryLogic() {
 
     const reader = new FileReader();
     reader.onload = (event) => {
-      const text = event.target.result;
-      const lines = text.split('\n');
+      try {
+        const text = event.target.result;
+        const lines = text.split('\n');
 
-      let processedQty = 0;
-      let imeisAdded = 0;
-      let notFoundCount = 0;
+        let processedQty = 0;
+        let imeisAdded = 0;
+        let notFoundCount = 0;
 
-      // Рабочая копия текущего состояния — нужна, чтобы несколько строк
-      // накладной, ссылающихся на один и тот же товар, накапливались
-      // последовательно (ровно так, как если бы товар сканировали
-      // несколько раз подряд), а не перезатирали друг друга.
-      const workingState = {};
-      Object.keys(scannedItems).forEach((id) => {
-        const s = scannedItems[id] || {};
-        workingState[id] = { actualQty: Number(s.actualQty) || 0, imeis: { ...(s.imeis || {}) } };
-      });
-
-      lines.forEach((line) => {
-        const cols = line.split('\t');
-        if (cols.length < 8) return;
-
-        const barcode = cols[3]?.trim();
-        const imei = cols[5]?.trim();
-        const qtyStr = cols[7]?.trim().replace(',', '.');
-        const qty = parseFloat(qtyStr);
-
-        if ((!barcode && !imei) || Number.isNaN(qty) || qty <= 0) return;
-
-        // Как и при ручном сканировании: сперва пробуем найти по IMEI
-        // (это самый точный идентификатор), если его нет — по штрихкоду.
-        const scannedCode = imei || barcode;
-        const found = findItemByCode(inventoryData, scannedCode);
-
-        if (!found) {
-          notFoundCount += 1;
-          const historyRecord = createHistoryRecord({
-            itemId: null,
-            itemName: 'Невідомо',
-            scannedCode,
-            status: 'NOT_FOUND',
-          });
-          socket.emit('update_scanned_item', { id: null, nextItemState: null, historyRecord });
-          return;
-        }
-
-        const { item, matchedImei } = found;
-        const current = workingState[item.id] || { actualQty: 0, imeis: {} };
-        const next = { actualQty: current.actualQty || 0, imeis: { ...(current.imeis || {}) } };
-
-        let scanMode;
-
-        if (matchedImei) {
-          const updateBaseQty = Boolean(scanModeWarehouse || scanModeBox);
-          const updateImeiState = Boolean(scanModeWarehouse || !scanModeBox);
-          const isNewImei = !next.imeis[matchedImei];
-
-          if (updateImeiState) {
-            next.imeis[matchedImei] = (next.imeis[matchedImei] || 0) + 1;
-            if (isNewImei) imeisAdded += 1;
-          }
-          if (updateBaseQty) {
-            next.actualQty += qty;
-          }
-
-          if (updateBaseQty && updateImeiState) {
-            scanMode = 'WAREHOUSE';
-          } else if (updateBaseQty) {
-            scanMode = 'BOX';
-          } else {
-            scanMode = 'DEVICE';
-          }
-        } else {
-          next.actualQty += qty;
-          scanMode = 'BOX';
-        }
-
-        processedQty += qty;
-
-        const nextItemState = normalizeItemState(next);
-        workingState[item.id] = nextItemState;
-
-        const historyRecord = createHistoryRecord({
-          itemId: item.id, itemName: item.name, scannedCode, status: 'OK', scanMode,
+        // Рабочая копия текущего состояния — нужна, чтобы несколько строк
+        // накладной, ссылающихся на один и тот же товар, накапливались
+        // последовательно (ровно так, как если бы товар сканировали
+        // несколько раз подряд), а не перезатирали друг друга.
+        const workingState = {};
+        Object.keys(scannedItems).forEach((id) => {
+          const s = scannedItems[id] || {};
+          workingState[id] = { actualQty: Number(s.actualQty) || 0, imeis: { ...(s.imeis || {}) } };
         });
 
-        socket.emit('update_scanned_item', { id: item.id, nextItemState, historyRecord });
-      });
+        lines.forEach((line, lineIndex) => {
+          try {
+            const cols = line.split('\t');
+            if (cols.length < 8) return;
 
-      showToast(`Накладна оброблена: додано ${processedQty} шт. IMEI: ${imeisAdded}. Не знайдено: ${notFoundCount}`);
+            const barcode = cols[3]?.trim();
+            const imei = cols[5]?.trim();
+            const qtyStr = cols[7]?.trim().replace(',', '.');
+            const qty = parseFloat(qtyStr);
+
+            if ((!barcode && !imei) || Number.isNaN(qty) || qty <= 0) return;
+
+            // Как и при ручном сканировании: сперва пробуем найти по IMEI
+            // (это самый точный идентификатор), если его нет — по штрихкоду.
+            const scannedCode = imei || barcode;
+            const found = findItemByCode(inventoryData, scannedCode);
+
+            if (!found) {
+              notFoundCount += 1;
+              const historyRecord = createHistoryRecord({
+                itemId: null,
+                itemName: 'Невідомо',
+                scannedCode,
+                status: 'NOT_FOUND',
+              });
+              socket.emit('update_scanned_item', { id: null, nextItemState: null, historyRecord });
+              return;
+            }
+
+            const { item, matchedImei } = found;
+            const current = workingState[item.id] || { actualQty: 0, imeis: {} };
+            const next = { actualQty: current.actualQty || 0, imeis: { ...(current.imeis || {}) } };
+
+            let scanMode;
+
+            if (matchedImei) {
+              const updateBaseQty = Boolean(scanModeWarehouse || scanModeBox);
+              const updateImeiState = Boolean(scanModeWarehouse || !scanModeBox);
+              const isNewImei = !next.imeis[matchedImei];
+
+              if (updateImeiState) {
+                next.imeis[matchedImei] = (next.imeis[matchedImei] || 0) + 1;
+                if (isNewImei) imeisAdded += 1;
+              }
+              if (updateBaseQty) {
+                next.actualQty += qty;
+              }
+
+              if (updateBaseQty && updateImeiState) {
+                scanMode = 'WAREHOUSE';
+              } else if (updateBaseQty) {
+                scanMode = 'BOX';
+              } else {
+                scanMode = 'DEVICE';
+              }
+            } else {
+              next.actualQty += qty;
+              scanMode = 'BOX';
+            }
+
+            processedQty += qty;
+
+            const nextItemState = normalizeItemState(next);
+            workingState[item.id] = nextItemState;
+
+            const historyRecord = createHistoryRecord({
+              itemId: item.id, itemName: item.name, scannedCode, status: 'OK', scanMode,
+            });
+
+            socket.emit('update_scanned_item', { id: item.id, nextItemState, historyRecord });
+          } catch (rowError) {
+            // eslint-disable-next-line no-console
+            console.error(`Накладна: помилка в рядку ${lineIndex + 1}`, rowError, line);
+          }
+        });
+
+        showToast(`Накладна оброблена: додано ${processedQty} шт. IMEI: ${imeisAdded}. Не знайдено: ${notFoundCount}`);
+      } catch (fileError) {
+        // eslint-disable-next-line no-console
+        console.error('Накладна: критична помилка обробки файлу', fileError);
+        showToast(`Помилка обробки накладної: ${fileError.message}`);
+      }
     };
     reader.readAsText(file);
     e.target.value = '';
